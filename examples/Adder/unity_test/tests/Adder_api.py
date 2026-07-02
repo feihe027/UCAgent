@@ -9,9 +9,44 @@ def current_path_file(file_name):
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), file_name)
 
 
+def get_test_artifact_name(request, default_name):
+    if request is None:
+        return default_name
+
+    node = request.node
+    tc_name = node.name
+    node_path = getattr(node, "path", None) or getattr(node, "fspath", None)
+    if node_path is not None:
+        tc_name = f"{os.path.splitext(os.path.basename(str(node_path)))[0]}__{tc_name}"
+
+    return "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in tc_name)
+
+
+def get_test_file_artifact_name(request, default_name):
+    if request is None:
+        return default_name
+
+    node = request.node
+    node_path = getattr(node, "path", None) or getattr(node, "fspath", None)
+    if node_path is not None:
+        tc_name = os.path.splitext(os.path.basename(str(node_path)))[0]
+    else:
+        tc_name = node.name
+
+    return "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in tc_name)
+
+
 def get_coverage_data_path(request, new_path:bool):
     # 通过toffee_test.reporter提供的get_file_in_tmp_dir方法可以让各用例产生的文件名称不重复 (获取新路径需要new_path=True，获取已有路径new_path=False)
-    return get_file_in_tmp_dir(request, current_path_file("data/"), "Adder.dat",  new_path=new_path)
+    tc_name = get_test_artifact_name(request, "Adder")
+    return get_file_in_tmp_dir(request, current_path_file("data/"), f"{tc_name}.dat",  new_path=new_path)
+
+
+def get_waveform_path(request, new_path:bool, suffix="fst"):
+    # 通过toffee_test.reporter提供的get_file_in_tmp_dir方法可以让各用例产生的文件名称不重复 (获取新路径需要new_path=True，获取已有路径new_path=False)
+    tc_name = get_test_file_artifact_name(request, "Adder")
+    suffix = (suffix or "fst").lstrip(".")
+    return get_file_in_tmp_dir(request, current_path_file("data/"), f"{tc_name}.{suffix}",  new_path=new_path)
 
 
 def create_dut(request):
@@ -28,9 +63,9 @@ def create_dut(request):
     # 设置覆盖率生成文件(必须设置覆盖率文件，否则无法统计覆盖率，导致测试失败)
     dut.SetCoverage(get_coverage_data_path(request, new_path=True))
 
-    # 设置波形生成文件（根据需要设置，可选）
-    # wave_path = get_file_in_tmp_dir(request, current_path_file("data/"), "Adder.fst",  new_path=True)
-    # dut.SetWaveform(wave_path)
+    # 设置波形生成文件；同一 test_*.py 内的用例复用同一个波形文件
+    wave_format = dut.GetWaveFormat() if hasattr(dut, "GetWaveFormat") else "fst"
+    dut.SetWaveform(get_waveform_path(request, new_path=False, suffix=wave_format))
 
     # 进行必要的初始化设置
     # 例如：设置默认值、复位等
