@@ -30,14 +30,15 @@ def get_test_artifact_name(request, default_name):
     return "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in tc_name)
 
 
-def get_test_file_artifact_name(request, default_name):
+def get_test_waveform_artifact_name(request, default_name):
     if request is None:
         return default_name
 
     node = request.node
     node_path = getattr(node, "path", None) or getattr(node, "fspath", None)
     if node_path is not None:
-        tc_name = os.path.splitext(os.path.basename(str(node_path)))[0]
+        file_name = os.path.splitext(os.path.basename(str(node_path)))[0]
+        tc_name = f"{file_name}-{node.name}"
     else:
         tc_name = node.name
 
@@ -53,10 +54,35 @@ def get_coverage_data_path(request, new_path:bool):
 
 def get_waveform_path(request, new_path:bool, suffix="fst"):
     # 通过toffee_test.reporter提供的get_file_in_tmp_dir方法可以让各用例产生的文件名称不重复 (获取新路径需要new_path=True，获取已有路径new_path=False)
-    # 获取测试文件名称，为每个 test_*.py 文件创建对应的波形
-    tc_name = get_test_file_artifact_name(request, "{{DUT}}")
+    # 获取测试文件名称和测试函数名称，为每个测试函数创建对应的波形
+    tc_name = get_test_waveform_artifact_name(request, "{{DUT}}")
     suffix = (suffix or "fst").lstrip(".")
     return get_file_in_tmp_dir(request, current_path_file("data/"), f"{tc_name}.{suffix}",  new_path=new_path)
+
+
+def get_new_waveform_path(request, suffix="fst"):
+    waveform_path = get_waveform_path(request, new_path=True, suffix=suffix)
+    if os.path.exists(waveform_path):
+        os.remove(waveform_path)
+    return waveform_path
+
+
+def configure_waveform_for_test_case(dut, request, waveform_path):
+    # pytest 下部分 DUT wrapper 会复用同一个仿真 runtime，构造函数的 waveform_filename
+    # 只在首次实例化时生效；这里显式按测试函数切换波形，保证每个测试函数一个波形文件。
+    waveform_key = get_test_waveform_artifact_name(request, "{{DUT}}")
+    current_key = getattr(dut, "_ucagent_waveform_key", None)
+    current_path = getattr(dut, "_ucagent_waveform_path", None)
+
+    if current_key == waveform_key and current_path == waveform_path:
+        return
+
+    if current_key is not None and hasattr(dut, "FlushWaveform"):
+        dut.FlushWaveform()
+
+    dut.SetWaveform(waveform_path)
+    setattr(dut, "_ucagent_waveform_key", waveform_key)
+    setattr(dut, "_ucagent_waveform_path", waveform_path)
 
 
 def create_dut(request):
@@ -76,13 +102,17 @@ def create_dut(request):
     # 设置覆盖率生成文件(必须设置覆盖率文件，否则无法统计覆盖率，导致测试失败)
     dut.SetCoverage(get_coverage_data_path(request, new_path=True))
 
-    # 设置波形生成文件；同一 test_*.py 内的用例复用同一个波形文件
-    dut.SetWaveform(get_waveform_path(request, new_path=False, suffix=dut.GetWaveFormat()))
+    # 设置波形生成文件；每个测试函数使用独立且未被占用的波形路径，避免波形后端自动追加 _r0 后缀
+    configure_waveform_for_test_case(
+        dut,
+        request,
+        get_new_waveform_path(request, suffix=dut.GetWaveFormat()),
+    )
 
     return dut
 
 
-@pytest.fixture(scope="module") # 用scope="module"确保每个测试文件只创建一次DUT和一个波形文件
+@pytest.fixture(scope="function") # 用scope="function"确保每个测试函数创建独立DUT和波形文件
 def dut(request):
     dut = create_dut(request)                         # 创建DUT
     func_coverage_group = get_coverage_groups(dut)
