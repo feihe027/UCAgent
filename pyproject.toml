@@ -41,6 +41,7 @@ dynamic = ["version"]
 
 [project.scripts]
 ucagent = "ucagent.cli:main"
+ucagent-vcs = "ucagent.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/XS-MLVP/UCAgent"
